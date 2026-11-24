@@ -1,0 +1,29 @@
+name: security
+on: [push, pull_request]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { fetch-depth: 0 }   # gitleaks needs history
+
+      # GATE: secret scan — exit non-zero on a finding, so the build fails
+      - name: Secret scan (Gitleaks)
+        run: |
+          docker run -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:v8.18.4 \
+            detect --source /repo --exit-code 1
+
+      # GATE or REPORT (your choice): SAST
+      - name: SAST (Semgrep)
+        if: always()
+        run: |
+          pip install semgrep
+          semgrep scan --config auto    # drop --error to make it a report
+
+      # REPORT: dependency scan — surface findings without blocking
+      - name: Dependency scan (Trivy)
+        if: always()
+        run: |
+          docker run -v "${{ github.workspace }}:/repo" aquasec/trivy:0.58.1 \
+            fs --scanners vuln --exit-code 0 /repo
