@@ -1,29 +1,49 @@
 name: security
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with: { fetch-depth: 0 }   # gitleaks needs history
+      # Pin to a full SHA (verify it on the actions/checkout releases page)
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0 # gitleaks needs history
 
-      # GATE: secret scan — exit non-zero on a finding, so the build fails
+      # GATE: secret scan - exits non-zero on a finding, so the build fails
       - name: Secret scan (Gitleaks)
         run: |
-          docker run -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:v8.18.4 \
+          docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:v8.18.4 \
             detect --source /repo --exit-code 1
 
-      # GATE or REPORT (your choice): SAST
+      # GATE: SAST - --error makes Semgrep fail on findings
+      # if: always() so it still runs even if the secret scan failed
       - name: SAST (Semgrep)
         if: always()
         run: |
           pip install semgrep
-          semgrep scan --config auto    # drop --error to make it a report
+          semgrep scan --config auto --error
 
-      # REPORT: dependency scan — surface findings without blocking
+      # REPORT: dependency scan - surfaces findings without blocking
       - name: Dependency scan (Trivy)
         if: always()
         run: |
-          docker run -v "${{ github.workspace }}:/repo" aquasec/trivy:0.58.1 \
-            fs --scanners vuln --exit-code 0 /repo
+          docker run --rm -v "${{ github.workspace }}:/repo" aquasec/trivy:0.58.1 \
+            fs --scanners vuln --severity HIGH,CRITICAL --exit-code 0 /repo \
+            | tee trivy-report.txt
+          {
+            echo "## Trivy dependency report"
+            echo '```'
+            cat trivy-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
